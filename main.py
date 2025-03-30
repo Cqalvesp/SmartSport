@@ -1,12 +1,14 @@
 import os
 import pymysql
+from smartsportDB import db_connection
 
 from flask import Flask, request, jsonify
-from smartsportDB import db_connection
+from flask_cors import CORS
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager, create_access_token
 
 app = Flask(__name__)
+CORS(app, origins=["Webflow URL"])
 
 bcrypt = Bcrypt(app)
 app.congif["JWT_SECRET_KEY"] = os.environ.get('FLASK_SECRET_KEY', 'default-secret-key')
