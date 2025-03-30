@@ -1,39 +1,87 @@
+import os
+import pymysql
+
 from flask import Flask, request, jsonify
-from smartsportDB import get_db_connection  
-import bcrypt
+from smartsportDB import db_connection
+from flask_bcrypt import Bcrypt
+from flask_jwt_extended import JWTManager, create_access_token
 
 app = Flask(__name__)
 
+bcrypt = Bcrypt(app)
+app.congif["JWT_SECRET_KEY"] = os.environ.get('FLASK_SECRET_KEY', 'default-secret-key')
+jwt = JWTManager(app)
+
+# Route for User Registration
 @app.route('/register', methods=['POST'])
-def register_user():
-    # Get data from the request
-    data = request.get_json()
+def register():
+    data = request.json
     username = data.get('username')
     email = data.get('email')
     password = data.get('password')
+    firstname = data.get('firstname', None)
+    lastname = data.get('lastname', None)
 
-    if not username or not email or not password:
-        return jsonify({"error": "Missing required fields"}), 400
+    if (username and email and password):
+        return jsonify({"error": "Username, Email, and Password are required fields"}), 400
+
+    try:
+        conn = db_connection()
+        cursor = conn.cursor()
+
+        # Check for duplicate username
+        cursor.execute("SELECT UserID FROM users WHERE Username = %s", (username,))
+        existing_user = cursor.fetchone()
+
+        if existing_user:
+            cursor.close()
+            conn.close()
+            return jsonify({"error" : "This Username is already taken"}), 409
+
+        # Hashing password before it is stored in database
+        hashed_pass = bcrypt.generate_password_hash(password).decode('utf-8')
+
+        # Add user to database
+        cursor.execute("""
+                INSERT INTO users (Username, Email, Password, FirstName, LastName)
+                VALUES (%s, %s, %s, %s, %s) """, (username, email, password, firstname, lastname))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({"message" : "User registered successfully!"}), 201
+
+    except pymysql.MySQLError as err:
+        return jsonify({"error" : str(err)}), 500
+
+
+# Route for User Login
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
+
+    if not (username and password):
+        return jsonify({"error" : "Username and Password are required"}), 400
     
-    # Hash the password
-    hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+    try: 
+        conn = db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM user WHERE username = %s", (username,))
+        user = cursor.fetchone()
+        conn.close()
 
-    # Check if username already exists
-    connection = get_db_connection()
-    cursor = connection.cursor()
-    cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
-    existing_user = cursor.fetchone()
+        if user and bcrypt.check_password_hash(user['password'], password):
+            # Create JWT Token for authentication
+            access_token = create_access_token(identity=user['id'])
+            return jsonify(access_token=access_token), 200
+        else:
+            return jsonify({"error" : "Password or Username is incorrect"}), 401
+        
+    except pymysql.MySQLError as err:
+        return jsonify({"error" : str(err)}), 500
 
-    if existing_user:
-        return jsonify({"error": "Username already exists"}), 409  # Conflict, duplicate user
-
-    # Insert new user into the database
-    cursor.execute("INSERT INTO users (username, email, password) VALUES (%s, %s, %s)", 
-                   (username, email, hashed_password))
-    connection.commit()
-    cursor.close()
-
-    return jsonify({"message": "User registered successfully!"}), 201
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     app.run(debug=True)
